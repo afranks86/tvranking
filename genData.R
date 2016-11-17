@@ -20,13 +20,14 @@ gen_tvbthometies <- function(K, T, a, b=NULL, bmask.list, rho,
     drawLambda <- FALSE
     if(is.null(lambda)){
         ## Initialize skill
-        lambda <- matrix(0,nrow=K,ncol=T)
-        lambda[,1] <- rgamma(K, a, b[,1])
+        lambda <- matrix(0, nrow=K, ncol=T)
+        lambda[, 1] <- rgamma(K, a, b[, 1])
+        V <- matrix(0, nrow=K, ncol=(T-1))
         drawLambda <- TRUE
     }
+
     
     for(t in 1:T){
-
         ## Generate w,t,l
 
         ## random matchups
@@ -45,27 +46,30 @@ gen_tvbthometies <- function(K, T, a, b=NULL, bmask.list, rho,
             wins[[t]] <- wins[[t]]+sparseMatrix(i=home[win.indices],j=away[win.indices],dims=c(K,K))
             losses[[t]] <- losses[[t]]+sparseMatrix(i=home[loss.indices],j=away[loss.indices],dims=c(K,K))
             ties[[t]] <- ties[[t]]+sparseMatrix(i=home[tie.indices],j=away[tie.indices],dims=c(K,K))
+
         }
 
         ## Update b's
         if(drawB & t<T){
-            W <- rpois(nrow(b),nu*omega*b[,t])
-            b[,t+1] <- rgamma(nrow(b),kappa+W,nu*(1+omega))
+            W <- rpois(nrow(b), nu*omega*b[,t])
+            b[, t+1] <- rgamma(nrow(b),kappa+W,nu*(1+omega))
         }
         ## Update lambda's
-        if(drawLambda & t<T){
-            V <- rpois(K,rho[,t]*lambda[,t])
-            lambda[,t+1] <- rgamma(K,a+V,rho[,t]+b[,t+1])
+        if(drawLambda & t < T){
+            V[, t] <- rpois(K, b[, t] * rho[, t] * lambda[,t])
+            lambda[, t+1] <- rgamma(K, a + V[, t], b[, t+1] * (1 + rho[, t]))
         }
 
     }
 
-    list(wins=wins,ties=ties,losses=losses,lambda=lambda,b=b)
+    list(wins=wins, ties=ties, losses=losses,
+         lambda=lambda, V=V, b=b)
 }
 
 if(FALSE){
-
-    ### Single group test
+    ##############################
+    ## Single group simulation
+    ##############################
     source("tvbtgibbshome.R")
     source("btemhometies.R")
     library(ggplot2)
@@ -74,57 +78,85 @@ if(FALSE){
     T <- 100
     a <- 2
 
-    rho_param <- matrix(c(800, 2, 1, .1), nrow=2, byrow=TRUE)
+    rho_param <- matrix(c(100, 2, 1, .1), nrow=2, byrow=TRUE)
     
     rho <- matrix(rgamma(1, rho_param[1, 1], rho_param[1,2]), nrow=K, ncol=(T-1))
-    rho[, c(25, 50, 75)] <- rgamma(1, rho_param[2, 1], rho_param[2, 2])
+    ## rho[, c(25, 50, 75)] <- rgamma(1, rho_param[2, 1], rho_param[2, 2])
     alpha <- 1.5
     theta <- 3
 
     b <- matrix(2, nrow=1, ncol=T)
-    bmask.list = list(matrix(TRUE, nrow=K, ncol=T))
+    bmask.list = list("group"=matrix(TRUE, nrow=K, ncol=T))
+
+    
     
     data <- gen_tvbthometies(K=K, T=T, a=a, b=b, bmask.list=bmask.list,
                              rho=rho, alpha=alpha, theta=theta,
                              lambda=NULL, games=20)
+    df <- as.data.frame(list(x=rep(1:100,K),lambda=as.vector(t(data$lambda)),team=rep(1:K,each=T)))
+    ggplot(data=df) + geom_line(aes(x=x,y=lambda)) + facet_wrap(~team)
+    
+    ## verify mean is a/b
+    mean(rowMeans(data$lambda))
+    
+    ## verify var is approx a/b^2
+    var(as.numeric(data$lambda))
 
+    ## verify regression to mean: should be close to a/b
+    mean(sapply(1:K, function(k) {
+    (rho[1, 1] + 1)*mean(data$lambda[k, 2:T] - rho[1, 1]/(1 + rho[1,1])*data$lambda[k, 1:(T-1)]) }))
+    
     init.list <- init_bthometies(data$wins, data$losses, data$ties, a, bmask.list)
-
-    rho2 <- matrix(rgamma(1,rho_param[1,1],rho_param[1,2]),nrow=K,ncol=(T-1))
-    rho2[,c(25,50,75)] <- rgamma(1,rho_param[2,1],rho_param[2,2])
-    rho2 <- matrix(1,nrow=K,ncol=(T-1))
-    rho2[,c(25,50,75)] <- 0.9
 
     results <- tvbtgibbshome(data$wins, data$losses, data$ties,
                              a=a, bmask.list=bmask.list,
                              rho=rho, rho_param=rho_param, Ngibbs=1000,
-                             Nburn=100, init.list=init.list, drawRho=FALSE)
-    
-    nsamps <- dim(results$lambda)[3]
-    mean.est <- apply(results$lambda,c(1,2),mean)
-    rescaler <- colSums(data$lambda)/colSums(mean.est)
-    
+                             Nburn=100, init.list=init.list,
+                             draw=c(b=FALSE, V=TRUE, lambda=TRUE))
+
+
+    ## rescale data
+    nsamps <- dim(results$lambda.samps)[3]
     for(i in 1:nsamps){
-        results$lambda[,,i] <- t(t(results$lambda[,,i])/rescaler)
+        rescaler <- colSums(data$lambda) / colSums(results$lambda.samps[, , i])
+        results$lambda.samps[, , i] <- t(t(results$lambda.samps[, , i])*rescaler)
     }
+    mean.est <- apply(results$lambda.samps, c(1,2), mean)
 
     df <- as.data.frame(list(x=rep(1:100,K),lambda=as.vector(t(data$lambda)),team=rep(1:K,each=T)))
     df$lower.est <- as.vector(t(apply(results$lambda,c(1,2),function(x) quantile(x,0.025))))
     df$upper.est <- as.vector(t(apply(results$lambda,c(1,2),function(x) quantile(x,0.975))))
     df$mean.est <- as.vector(t(apply(results$lambda,c(1,2),mean)))
 
-    pdf("simulation.pdf")
-    ggplot(data=df)+geom_line(aes(x=x,y=lambda))+facet_wrap(~team)+geom_ribbon(aes(x=x,ymin=lower.est,ymax=upper.est),alpha=0.3)+geom_line(aes(x=x,y=mean.est),colour="red")
-    dev.off()
+    1 - (mean(df$upper.est < df$lambda) +  mean(df$lower.est > df$lambda))
     
-    ## ggplot()+geom_ribbon(aes(x=1:100,ymin=quantile(results$theta,0.025),ymax=quantile(results$theta,0.975)),alpha=0.3)
+    pdf("single_simulation.pdf")
 
-    ## ggplot()+geom_ribbon(aes(x=1:100,ymin=quantile(results$alpha,0.025),ymax=quantile(results$alpha,0.975)),alpha=0.3)
+    ggplot(data=df) + geom_line(aes(x=x,y=lambda)) +
+        facet_wrap(~team) +
+        geom_ribbon(aes(x=x,ymin=lower.est,ymax=upper.est),alpha=0.3) +
+        geom_line(aes(x=x,y=mean.est),colour="red")
+    
+    dev.off()
 
 
-    ### Debug sampleRho
-    rho_mask <- array(0,dim=c(K,T-1,1))
-    rho_mask[,,1] <- rho[1]
-    sampleRho(data$lambda,rho,rho[1],rho_mask,a,b,rho_param[1],rho_param[2])
+
+    ##############################
+    ## Three group mean variation
+    ##############################
+
+    K <- 30
+    T <- 100
+    a <- 2
+
+    rho_param <- matrix(c(100, 2, 1, .1), nrow=2, byrow=TRUE)
+    
+    rho <- matrix(rgamma(1, rho_param[1, 1], rho_param[1,2]), nrow=K, ncol=(T-1))
+    alpha <- 1.5
+    theta <- 3
+
+    b <- matrix(2, nrow=3, ncol=T)
+    bmask.list = list("group"=matrix(TRUE, nrow=K, ncol=T))
+        
     
 }
