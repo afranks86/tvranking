@@ -1,9 +1,9 @@
-init_bthometies <- function(wins,losses,ties,a,bmask.list){
+init_bthometies <- function(wins, losses, ties, a, bmask.list){
 
     K <- nrow(wins[[1]])
     T <- length(wins)
     indices1 <- indices2 <- vector("list",T)
-    at <- matrix(0,nrow=K,ncol=T)
+    wltStat <- matrix(0,nrow=K,ncol=T)
     bi <- matrix(0,nrow=K,ncol=T,dimnames=list(rownames(wins[[1]]),1:T))
     bmat <- matrix(0,nrow=length(bmask.list),ncol=T,dimnames=list(names(bmask.list),1:T))
     for(t in 1:T){
@@ -24,7 +24,7 @@ init_bthometies <- function(wins,losses,ties,a,bmask.list){
         j2 <- indices2[[t]]$j
         val2 <- indices2[[t]]$x
 
-        at[,t] <- a+rowSums(wt+t(lt))
+        wltStat[, t] <- rowSums(wt+t(lt))
     }
     
     ## Initial values for lambda, theta and alpha
@@ -36,7 +36,7 @@ init_bthometies <- function(wins,losses,ties,a,bmask.list){
     
     for(group in names(bmask.list)){
         bmask <- bmask.list[[group]]
-        bval <- a/mean(fit$lambda[bmask])
+        bval <- a / mean(fit$lambda[bmask])
         bmat[group,] <- bval
         bi[bmask] <- bval
     }
@@ -44,7 +44,7 @@ init_bthometies <- function(wins,losses,ties,a,bmask.list){
     lambda <- fit$lambda*a
     
     list(K=K,T=T, indices1=indices1, indices2=indices2,
-         lambda=fit$lambda, alpha=fit$alpha, theta=fit$theta, at=at,
+         lambda=fit$lambda, alpha=fit$alpha, theta=fit$theta, wltStat=wltStat,
          bi=bi, bmat=bmat)
     
 }

@@ -43,9 +43,14 @@
 tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
                           kappa=1, nu=1,omega=Inf,
                           rho, rho_param, Ngibbs, Nburn=1,
-                          init.list=NULL,sample.skip=10, drawRho=FALSE){
+                          init.list=NULL,sample.skip=10, draw=c()){
 
-    
+
+
+    ## whcich parameters to sample (useful for debugging)
+    draw <- c(draw, V=TRUE, b=TRUE, rho=FALSE, a=FALSE)
+    draw <- draw[unique(names(draw))]
+        
     ## Number of time steps, T, and number of individuals K
     T <- length(wins)
     K <- nrow(wins[[1]])
@@ -56,15 +61,7 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
     estimate_rho <- rep(1,length(rho_val))
     rho_mask <- array(0,dim=c(K,T-1,length(rho_val)))
     for(i in 1:length(rho_val)){
-        rho_mask[,,i] <- rho==rho_val[i]
-    }
-
-    if(a<0){
-        estimate_a <- TRUE
-        a <- -a
-    }
-    else{
-        estimate_a <- FALSE
+        rho_mask[, , i] <- rho==rho_val[i]
     }
 
     if(is.null(bmask.list)){
@@ -76,20 +73,18 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
     if(is.null(init.list)){
         init.list <- init_bthometies(wins, losses, ties, a, bmask.list)
     }
+    
     lambda <- init.list$lambda
     theta <- init.list$theta
     alpha <- init.list$alpha
-    at <- init.list$at
+    wltStat <- init.list$wltStat
 
     indices1 <- lapply(1:T, function(t) summary(wins[[t]] + ties[[t]]))
     indices2 <- lapply(1:T, function(t) summary(losses[[t]]+ties[[t]]))
 
-    at[] <- a
     bi <- init.list$bi
     bmat <- init.list$bmat
-    b.groups <- matrix(0, nrow=length(bmask.list), ncol=T,
-                       dimnames=list(names(bmask.list), 1:T))
-
+    
     ## Store every skip-th value
     Nsamples <- (Ngibbs-Nburn)/sample.skip
     theta.samps <- rep(0,Nsamples)
@@ -104,18 +99,20 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
 
     lambda.samps[ , ,1] <- matrix(0, nrow=K, ncol=T)
     for(t in 1:T){
-        lambda.samps[, t, 1] <- lambda[, t]/sum(lambda[, t])*K 
+        lambda.samps[, t, 1] <- lambda[, t]
     }
 
     theta.samps[1] <- init.list$theta
     alpha.samps[1] <- init.list$alpha
     a.samps[1] <- a
-    b.samps[,,1] <- bmat
+    b.samps[, , 1] <- bmat
 
     ## Init latent variables, V
-
-    V <- matrix(rpois(K*(T-1), as.vector(bi[, 1:(T-1)]*rho*lambda[, 1:(T-1)])),
-                nrow=K, ncol=(T-1))
+    if(is.null(init.list$V))
+        V <- matrix(rpois(K*(T-1), as.vector(bi[, 1:(T-1)]*rho*lambda[, 1:(T-1)])),
+                    nrow=K, ncol=(T-1))
+    else
+        V <- init.list$V
 
     ## Init latent variables W, to mean
     if(omega!=Inf) {
@@ -132,73 +129,60 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
 
         for(grp in names(bmask.list)) {
             bmask <- bmask.list[[grp]]
-            bi[bmask] <- t(t(bmask)*bmat[grp,])[bmask]
+            bi[bmask] <- t(t(bmask) * bmat[grp, ])[bmask]
         }
 
-        
-        ## Sample total weights at each time from prior
-        ##
-
-        ## S <- rep(1,T)
-
-        ## lambda.prior <- rgamma(1, a, mean(bi[, 1]))
-        ## S[1] <- rpois(1, mean(bi[, 1])*mean(rho[, 1])*lambda.prior)
-        ## lambda[, 1] <- S[1]*lambda[,1]/sum(lambda[,1])
-        ## for(t in 1:T){
-        ##     Vtmp <- rpois(1, bi[,2]*rho[,1]*lambda.prior)
-        ##     lambda.prior <- rgamma(K,a+Vtmp,bi[,t]*(1+rho[,t-1]))
-        ##     S[t]  <- sum(lambda.prior)
-        ##    lambda[, t] <- lambda[, t] / sum(lambda[, t]) * kappa/nu * nrow(lambda)
-        ##     if(t<T)
-        ##         Vtmp <- rpois(K,bi[,t]*rho[,(t-1)]*lambda.prior)
-        ## }
-
+        S <- rgamma(1, K*a, bi[1])
+        lambda <- lambda/mean(colSums(lambda))*S 
 
         ## Sample the latent V
-        V <- sampleV(V, lambda, rho, a, bi)
+        if(draw["V"])
+            V <- sampleV(V, lambda, rho, a, bi)
 
-        ## Update bthometies
-        update <- update_bthometies(wins,losses,ties,indices1,indices2,T,K,V,lambda,alpha,theta,at,bi)
-        lambda <- update$lambda
-        alpha <- update$alpha
-        theta <- update$theta
-        at <- update$at
-        a <- at[1,1]
-
-        for(t in 1:T) {
-            S <- mean(bi[, t])
-            lambda[, t] <- lambda[, t]/sum(lambda[, t])*K*S
+        ## Update bthometies`
+        if(draw["lambda"]) {
+            update <- update_bthometies(wins, losses, ties,
+                                        indices1, indices2,
+                                        T, K, V, lambda, alpha, theta, wltStat, bi)
+            lambda <- update$lambda
+            alpha <- update$alpha
+            theta <- update$theta
         }
-
+        
         ## Sample rho given lambda, a
-        for(k in 1:length(rho_val)){
-            if(estimate_rho[k] & drawRho){
-                rho.draw <- sampleRho(lambda,rho,rho_val[k],rho_mask[,,k],a,bi,rho_param[k,1],rho_param[k,2])
-                rho <- rho.draw$rho
-                rho_val[k] <- rho.draw$rho_val
+        if(draw["rho"]) {
+            for(k in 1:length(rho_val)) {
+                rho.draw <- sampleRho(lambda, rho, rho_val[k],
+                                      rho_mask[, , k], a, bi,
+                                      rho_param[k, 1], rho_param[k, 2])
+                    rho <- rho.draw$rho
+                    rho_val[k] <- rho.draw$rho_val
             }
         }
 
         ## sample bi
+        if(draw["b"]) {
+            
+            bout <- samplebi(bi, bmask.list, bmat, lambda=lambda, rho=rho,
+                             V=V, W=W, T=T, kappa=kappa, nu=nu, omega=omega)
+            bi <- bout$bi
+            bmat <- bout$bmat
 
-        bout <- samplebi(bi, bmask.list, bmat, lambda=lambda, rho=rho,
-                         V=V, W=W, T=T, kappa=kappa, nu=nu, omega=omega)
-        bi <- bout$bi
-        bmat <- bout$bmat
-
-        ##
-        bi <- t(t(bi)/colMeans(bi)) * kappa/nu
-        bmat <- t(t(bmat)/colMeans(bi)) * kappa/nu
+            bi <- t(t(bi)/colMeans(bi)) * kappa/nu
+            bmat <- t(t(bmat)/colMeans(bi)) * kappa/nu
+            W <- bout$W
+        }
         
-        W <- bout$W
-
-        #print(rho[1,])
-        ## sample a given rho, lambda
-        if(estimate_a)
+        if(draw["a"])
             a <- samplea(rho,lambda,a,b)
 
+        ## temporary
+        print(mean(lambda))
+        print(median(as.numeric(V)))
+        
         ## Store current sample if not burn-in
         if(i > Nburn){
+
             ind <- ceiling((i-Nburn)/sample.skip)
             lambda.samps[,,ind] <- lambda
             theta.samps[ind] <- theta
@@ -207,8 +191,8 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
             rho.samps[,ind] <- rho_val
             b.samps[,,ind] <- bmat
         }
-        if(i %%  500 == 0)
-            browser()
+        ## if(i %%  100 == 0)
+            ## browser()
         
     }
 
@@ -226,8 +210,6 @@ sampleV <- function(V, lambda, rho, a, bi, N.MH=5){
     for(nn in 1:N.MH){  ##number of metropolis proposals
 
         Vnew <- rpois(K*(T-1), lambda=as.vector(bi[, 1:(T-1)]*rho*lambda[, 1:(T-1)]))
-        Vnew <- matrix(Vnew, nrow=K, ncol=(T-1))
-
         u <- runif(K*(T-1))
 
         logaccept <- (Vnew - V)*log(bi[, 2:T]*(1+rho)*lambda[, 2:T]) + lgamma(a+V) - lgamma(a+Vnew)
@@ -359,11 +341,11 @@ sampleRho <- function(lambda,rho,rho_val,rho_mask,a,bi,rho_a, rho_b,N.MH=2){
 }
 
 update_bthometies <- function(wins, losses, ties, indices1, indices2,
-                              T, K, V, lambda, alpha, theta, at, bi){
+                              T, K, V, lambda, alpha, theta, wltStat, bi){
 
     ## Sample Z given lambda
     Z1 <- Z2 <- vector("list",T)
-    bdat <- matrix(0,nrow=K,ncol=T)
+    bdat <- matrix(0, nrow=K, ncol=T)
 
     total_ties <- sum(sapply(ties,sum))
     total_wins_and_ties <- total_ties + sum(sapply(wins,sum))
@@ -382,21 +364,22 @@ update_bthometies <- function(wins, losses, ties, indices1, indices2,
         
         Z1[[t]] <- sparseMatrix(i=i1, j=j1, x=rgamma(N1, shape=val1, rate=(alpha*lambda[i1, t]+theta*lambda[j1,t])), dims=c(K, K),check=FALSE)
         Z2[[t]] <- sparseMatrix(i=i2, j=j2, x=rgamma(N2, shape=val2, rate=(alpha*lambda[i2, t]+theta*lambda[j2,t])), dims=c(K, K),check=FALSE)
-        
+         
         bdat[, t] <- rowSums(Z1[[t]]) + theta*colSums(Z1[[t]]) + alpha*theta*rowSums(Z2[[t]]) + colSums(Z2[[t]])
 
     }
 
     ## Sample lambda given Z,U,theta,alpha
     if(T==1){
-        lambda[, 1] <- rgamma(K, at[, 1], bdat[,1] + bi[, 1])
+        lambda[, 1] <- rgamma(K, a + wltStat[, 1], bi[, 1] + bdat[, 1])
     }
     else{
-        lambda[, 1] <- rgamma(K, at[, 1] + V[, 1], bdat[, 1] + bi[, 1]*rho[,1])
-        lambda[, T] <- rgamma(K, at[, T] + V[, T-1], bdat[, T] + bi[, T]*(1+rho[,T-1]))
-        lambda[, 2:(T-1)] <- rgamma(K*(T-2), at[, 2:(T-1)] + V[, 1:(T-2)] + V[, 2:(T-1)],
-                                    bdat[, 2:(T-1)] + bi[, 2:(T-1)]*rho[, 2:(T-1)] + bi[, 2:(T-1)]*(1+rho[, 1:(T-2)]))
-
+        lambda[, 1] <- rgamma(K, a + wltStat[, 1] + V[, 1],
+                              bdat[, 1] + bi[, 1]*(1 +rho[, 1]))
+        lambda[, T] <- rgamma(K, a + wltStat[, T] + V[, T-1], bdat[, T] + bi[, T]*(1+rho[,T-1]))
+        lambda[, 2:(T-1)] <-
+            rgamma(K*(T-2), a + wltStat[, 2:(T-1)] + V[, 1:(T-2)] + V[, 2:(T-1)],
+                   bdat[, 2:(T-1)] + bi[, 2:(T-1)]*rho[, 2:(T-1)] + bi[, 1:(T-2)]*(1+rho[, 1:(T-2)]))
 
     }
 
@@ -447,7 +430,7 @@ update_bthometies <- function(wins, losses, ties, indices1, indices2,
             theta <- theta_new
     }
 
-    list(lambda=lambda, alpha=alpha, theta=theta, at=at)
+    list(lambda=lambda, alpha=alpha, theta=theta)
 }
 
 ## Visualize lambdas over time
