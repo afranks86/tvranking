@@ -12,11 +12,11 @@ gen_tvbthometies <- function(K, T, a, b=NULL, bmask.list, rho,
     drawB <- FALSE
     if(is.null(b)){
         ## initialize group means
-        b <- matrix(0, dim(bmask.list))
-        b[, 1] <- rgamma(nrow(bmask.list), kappa, nu)
+        b <- matrix(0, nrow=K, ncol=T)
+        b[, 1] <- rgamma(1, kappa, nu)
         drawB <- TRUE
     }
-
+    
     drawLambda <- FALSE
     if(is.null(lambda)){
         ## Initialize skill
@@ -26,12 +26,13 @@ gen_tvbthometies <- function(K, T, a, b=NULL, bmask.list, rho,
         drawLambda <- TRUE
     }
 
-    
+        ## Generate w,t,l    
     for(t in 1:T){
-        ## Generate w,t,l
+        if(t %% 10 == 0)
+            print(sprintf("Generated games for %i time points", t))
 
         ## random matchups
-        for(i in 1:games){
+        for(i in 1p:games){
             home <- sample(1:K,K/2)
             away <- sample(setdiff(1:K,home),K/2)
 
@@ -50,7 +51,7 @@ gen_tvbthometies <- function(K, T, a, b=NULL, bmask.list, rho,
         }
 
         ## Update b's
-        if(drawB & t<T){
+        if(drawB & t < T){
             W <- rpois(nrow(b), nu*omega*b[,t])
             b[, t+1] <- rgamma(nrow(b),kappa+W,nu*(1+omega))
         }
@@ -155,8 +156,68 @@ if(FALSE){
     alpha <- 1.5
     theta <- 3
 
-    b <- matrix(2, nrow=3, ncol=T)
-    bmask.list = list("group"=matrix(TRUE, nrow=K, ncol=T))
-        
+    bvals <- sort(rgamma(3, 6, 3))
+    b <- matrix(rep(bvals, each=K/3), nrow=K, ncol=T)
+    bmask.list <- list()
+    for(i in 1:3) {
+        mat <- matrix(FALSE, nrow=K, ncol=T)
+        start <- (i-1)*K/3 + 1
+        end <- start + K/3 - 1
+        mat[start:end, ] <- TRUE
+        bmask.list[[as.character(i)]] <- mat
+    }
+
+    data <- gen_tvbthometies(K=K, T=T, a=a, b=b, bmask.list=bmask.list,
+                             rho=rho, alpha=alpha, theta=theta,
+                             lambda=NULL, games=20)
+
+    df <- as.data.frame(list(x=rep(1:100,K),lambda=as.vector(t(data$lambda)),team=rep(1:K,each=T)))
+    ggplot(data=df) + geom_line(aes(x=x,y=lambda)) + facet_wrap(~team)
+
+    mean(data$lambda[1:10, ])
+    mean(data$lambda[11:20, ])
+    mean(data$lambda[21:30, ])
+
+    init.list <- init_bthometies(data$wins, data$losses, data$ties, a, bmask.list)
+    init.list$lambda[] <- 1
+    init.list$bmat[] <- 1
+    init.list$bi[] <- 1
+
+    results <- tvbtgibbshome(data$wins, data$losses, data$ties,
+                             a=a, bmask.list=bmask.list,
+                             rho=rho, rho_param=rho_param, Ngibbs=2000,
+                             Nburn=100, init.list=init.list,
+                             kappa=6, nu=3,
+                             draw=c(b=TRUE, V=TRUE, lambda=TRUE))
+
+    ## rescale data
+    nsamps <- dim(results$lambda.samps)[3]
+    for(i in 1:nsamps){
+        rescaler <- colSums(data$lambda) / colSums(results$lambda.samps[, , i])
+        results$lambda.samps[, , i] <- t(t(results$lambda.samps[, , i])*rescaler)
+    }
+    mean.est <- apply(results$lambda.samps, c(1,2), mean)
+
+    df <- as.data.frame(list(x=rep(1:100,K),lambda=as.vector(t(data$lambda)),team=rep(1:K,each=T)))
+    df$lower.est <- as.vector(t(apply(results$lambda,c(1,2),function(x) quantile(x,0.025))))
+    df$upper.est <- as.vector(t(apply(results$lambda,c(1,2),function(x) quantile(x,0.975))))
+    df$mean.est <- as.vector(t(apply(results$lambda,c(1,2),mean)))
+
+    1 - (mean(df$upper.est < df$lambda) +  mean(df$lower.est > df$lambda))
+    
+    pdf("multi_simulation.pdf")
+
+    ggplot(data=df[df$team > 10, ]) + geom_line(aes(x=x,y=lambda)) +
+        facet_wrap(~team) +
+        geom_ribbon(aes(x=x,ymin=lower.est,ymax=upper.est),alpha=0.3) +
+        geom_line(aes(x=x,y=mean.est),colour="red")
+    
+    dev.off()
+
+    ##############################
+    ## TV mean simulation
+    ##############################
+
+    ## TODO
     
 }

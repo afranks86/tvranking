@@ -41,19 +41,18 @@
 ###########################################################################
 
 tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
-                          kappa=1, nu=1,omega=Inf,
+                          kappa=5, nu=5, omega=Inf,
                           rho, rho_param, Ngibbs, Nburn=1,
-                          init.list=NULL,sample.skip=10, draw=c()){
-
-
+                          init.list=NULL, sample.skip=10, draw=c()){
 
     ## whcich parameters to sample (useful for debugging)
-    draw <- c(draw, V=TRUE, b=TRUE, rho=FALSE, a=FALSE)
+    draw <- c(draw, V=TRUE, b=TRUE, rho=FALSE, a=FALSE, lambda=TRUE)
     draw <- draw[unique(names(draw))]
         
     ## Number of time steps, T, and number of individuals K
     T <- length(wins)
     K <- nrow(wins[[1]])
+
 
     ## init rho_mask for rho estimation
     ## rho is a K x T matrix (how many different values of rho are there?)
@@ -84,12 +83,13 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
 
     bi <- init.list$bi
     bmat <- init.list$bmat
-    
+    Ngroups <- nrow(bmat)
+
     ## Store every skip-th value
     Nsamples <- (Ngibbs-Nburn)/sample.skip
-    theta.samps <- rep(0,Nsamples)
-    alpha.samps <- rep(0,Nsamples)
-    a.samps <- rep(1,Nsamples)
+    theta.samps <- rep(0, Nsamples)
+    alpha.samps <- rep(0, Nsamples)
+    a.samps <- rep(1, Nsamples)
     b.samps <- array(0, dim=c(length(bmask.list), T, Nsamples),
                      dimnames=list(names(bmask.list), 1:T, 1:Nsamples))
     rho.samps <- matrix(0,nrow=length(rho_val),ncol=Nsamples)
@@ -115,8 +115,11 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
         V <- init.list$V
 
     ## Init latent variables W, to mean
-    if(omega!=Inf) {
-        W <- matrix(round(as.vector(nu*omega*bmat[,1:(T-1)])),nrow=length(bmask.list),ncol=(T-1),dimnames=list(names(bmask.list),1:(T-1)))
+    if(omega != Inf) {
+        W <- matrix(round(as.vector(nu * omega *bmat[, 1:(T-1)])),
+                    nrow=length(bmask.list),
+                    ncol=(T-1),
+                    dimnames=list(names(bmask.list), 1:(T-1)))
     } else {
         W <- NULL
     }
@@ -127,13 +130,25 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
         if(i%%1==0)
             print(sprintf("i = %i",i))
 
-        for(grp in names(bmask.list)) {
-            bmask <- bmask.list[[grp]]
-            bi[bmask] <- t(t(bmask) * bmat[grp, ])[bmask]
-        }
 
-        S <- rgamma(1, K*a, bi[1])
-        lambda <- lambda/mean(colSums(lambda))*S 
+        if(draw["b"]) {
+            Btotal <- rgamma(1, Ngroups*kappa, nu)
+            bmat <- bmat / mean(colSums(bmat)) * Btotal
+        }
+        ## for(grp in names(bmask.list)) {
+        ##     browser()
+        ##     bmask <- bmask.list[[grp]]
+        ##     bi[bmask] <- t(t(bmask) * bmat[grp, ])[bmask]
+        ## }
+
+        if(draw["lambda"]) {
+            ##S <- rgamma(1, K*a, mean(bmat))
+            S <- rgamma(1, K*a, 1)
+            lambda <- lambda / mean(colSums(lambda))*S
+            print(mean(as.numeric(lambda)))
+            print(var(as.numeric(lambda)))
+
+        }
 
         ## Sample the latent V
         if(draw["V"])
@@ -167,18 +182,19 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
                              V=V, W=W, T=T, kappa=kappa, nu=nu, omega=omega)
             bi <- bout$bi
             bmat <- bout$bmat
-
-            bi <- t(t(bi)/colMeans(bi)) * kappa/nu
-            bmat <- t(t(bmat)/colMeans(bi)) * kappa/nu
             W <- bout$W
         }
         
         if(draw["a"])
-            a <- samplea(rho,lambda,a,b)
+            a <- samplea(rho, lambda, a, b)
 
         ## temporary
-        print(mean(lambda))
-        print(median(as.numeric(V)))
+
+        ## tmp <- head(sort(bmat[, T]))
+        ## print(tmp)
+        ## print(sapply(names(tmp), function(x) mean(lambda[bmask.list[[x]]])))
+        ## print(cor(sort(bmat[, T]),
+        ##           1/ sapply(rownames(bmat), function(x) mean(lambda[bmask.list[[x]]])) * a))
         
         ## Store current sample if not burn-in
         if(i > Nburn){
@@ -192,7 +208,7 @@ tvbtgibbshome <- function(wins, losses, ties, a, bmask.list=NULL,
             b.samps[,,ind] <- bmat
         }
         ## if(i %%  100 == 0)
-            ## browser()
+        ##     browser()
         
     }
 
@@ -237,9 +253,13 @@ samplea <- function(rho, lambda, a, b, T, N.MH=2){
 ## b_t,i|W_t-1 ~ Gam(kappa+W_t-1,nu*(1+w_t-1))
 samplebi <- function(bi, bmask.list, bmat, lambda, rho, V, W, T,
                      kappa, nu, omega=Inf, N.MH=5){
+
+    ## Rescale b's????
+
     ## For non-time-varying bi
-    if(omega==Inf){
+    if(omega == Inf){
         for(grp in names(bmask.list)){
+
             bmask.full <- bmask.list[[grp]]
             bmask.first <- bmask.full[, 1]
             bmask.last <- bmask.full[, T]
@@ -249,12 +269,15 @@ samplebi <- function(bi, bmask.list, bmat, lambda, rho, V, W, T,
                 sum(V[, 1:(T-2)][bmaskMid] + V[, 2:(T-1)][bmaskMid]) +
                 sum(V[bmask.first, 1] ) +
                 sum(V[bmask.last, T-1]) +
-                sum(bmask.full)*a
+                sum(bmask.full)*a +
                 kappa
             b.beta <- sum((1 + rho[, 1:(T-2)][bmaskMid] +
                            rho[, 2:(T-1)][bmaskMid])*lambda[, 2:(T-1)][bmaskMid]) +
                 sum((1+rho[bmask.first, 1])*lambda[bmask.first, 1]) +
                 sum((1+rho[bmask.last, T-1])*lambda[bmask.last, T]) + nu
+
+            #b.alpha <- sum(bmask.full)*a - 1 + kappa
+            #b.beta <- sum(lambda[bmask.full]) + nu
                 
             b.new <- rgamma(1, b.alpha, b.beta)
             bmat[grp, ] <- b.new
@@ -416,7 +439,6 @@ update_bthometies <- function(wins, losses, ties, indices1, indices2,
     }
 
     alpha <- rgamma(1, total_wins_and_ties + 20, b_alpha + 10)
-    
     
     ## sample theta given Z, U,lambda with MH step
     theta_new <- rnorm(1, theta, .1) # proposal ## use truncated normal to improve eff

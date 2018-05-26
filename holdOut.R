@@ -101,13 +101,16 @@ HeldOutLikelihood <- function(K, winsTest, lossesTest, tiesTest, Lambda, alphas,
             theta <- mean(thetas)
             
             homeWinProb <-  alpha*lam1/(alpha*lam1+theta*lam2)
-            
+
+            ll <- ll + sum(log(homeWinProb))
         } else {
 
             alphaLam1 <- sweep(lam1, 2, alphas, '*')
             thetaLam2 <- sweep(lam2, 2, thetas, '*')
         
-            homeWinProb <- rowMeans((alphaLam1)/(alphaLam1 + thetaLam2))
+            homeWinProb <- alphaLam1 / (alphaLam1 + thetaLam2)
+
+            ll <- ll + sum(rowMeans(log(homeWinProb)))
         }
         
         ## Losses
@@ -125,16 +128,19 @@ HeldOutLikelihood <- function(K, winsTest, lossesTest, tiesTest, Lambda, alphas,
             
             alphaThetaLam1 <- lam1*mean(alphas)*mean(thetas)
             
-            homeLossProb <- lam2/(alphaThetaLam1 + lam2)
-            
+            homeLossProb <- lam2 / (alphaThetaLam1 + lam2)
+
+            ll <- ll + sum(log(homeLossProb))
         } else {
 
             alphaThetaLam1 <- sweep(lam1, 2, alphas*thetas, '*')
             
-            homeLossProb <- rowMeans(lam2/(alphaThetaLam1 + lam2))
-        }
-        ## Ties
+            homeLossProb <- lam2 / (alphaThetaLam1 + lam2)
 
+            ll <- ll + sum(rowMeans(log(homeLossProb)))
+        }
+
+        ## Ties
         indices <- which(tiesTest[[t]])
         homeTeams <- (indices-1) %% K + 1
         awayTeams <- floor( (indices - 1) / K)+1
@@ -155,18 +161,21 @@ HeldOutLikelihood <- function(K, winsTest, lossesTest, tiesTest, Lambda, alphas,
             homeLossProbT <- lam2/(alphaThetaLam1 + lam2)
 
             tieProb <- 1 - homeWinProbT-homeLossProbT
+
+            ll <- ll + sum(log(tieProb))
+            
         } else {
+
             alphaLam1 <- sweep(lam1, 2, alphas, '*')
             thetaLam2 <- sweep(lam2, 2, thetas, '*')
             alphaThetaLam1 <- sweep(lam1, 2, alphas*thetas, '*')
 
-            homeWinProbT <- rowMeans((alphaLam1)/(alphaLam1 + thetaLam2))
-            homeLossProbT <- rowMeans(lam2/(alphaThetaLam1 + lam2))
-
+            homeWinProbT <- alphaLam1 / (alphaLam1 + thetaLam2)
+            homeLossProbT <- lam2 / (alphaThetaLam1 + lam2)
             tieProb <- 1 - homeWinProbT-homeLossProbT
-        }
 
-        ll <- ll + sum(log(homeWinProb)) +  sum(log(homeLossProb)) + sum(log(tieProb))
+            ll <- ll + sum(rowMeans(log(tieProb)))
+        }
     }
     
     ll

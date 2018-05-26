@@ -12,7 +12,8 @@ loadSoccerData <- function() {
         leagues <- list.files(year,pattern="csv")
         for(league in leagues){
             print(league)
-            tab <- read.csv(sprintf("%s/%s",year,league),stringsAsFactors=FALSE)
+            tab <- read.csv(sprintf("%s/%s",year,league),
+                            stringsAsFactors=FALSE, fileEncoding="latin1")
             tab <- tab[,c("Div","Date","HomeTeam","AwayTeam","FTR")]
             tab.full <- rbind(tab.full,tab)
 
@@ -32,7 +33,7 @@ loadSoccerData <- function() {
         tab <- read.csv(tourney,stringsAsFactors=FALSE)
         tab.uefa <- rbind(tab.uefa,tab)
     }
-    names.map <- read.csv("~/Dropbox/tvranking/Data/Soccer/names-map.csv",comment.char="#",stringsAsFactors=FALSE,header=FALSE,allowEscapes=TRUE)
+    names.map <- read.csv("~/Dropbox/tvranking/Data/Soccer/names-map.csv",comment.char="#",stringsAsFactors=FALSE, header=FALSE, allowEscapes=TRUE)
 
     for(i in 1:nrow(names.map)){
         tab.uefa$Home <- gsub(names.map[i,2],names.map[i,1],tab.uefa$Home)
@@ -151,7 +152,6 @@ init_wlt <- function(tab, leagues.list, leagues.map, dt=1){
 
 }
 
-setwd("~/Dropbox/tvranking/")
 init <- loadSoccerData()
 wins <- init$wins
 losses <- init$losses
@@ -160,8 +160,8 @@ bmask.list <- init$bmask.list
 
 if( FALSE ) {
 ###
-    source("/Users/afranks/Dropbox/tvranking/R\ Implementation/tvranking/btemhometies.R")
-    source("/Users/afranks/Dropbox/tvranking/R\ Implementation/tvranking/tvbtgibbshome.R")
+    source("btemhometies.R")
+    source("tvbtgibbshome.R")
 
     rho <- 50*matrix(1,nrow=nrow(wins[[1]]),ncol=(length(wins)-1))
     rho_param <- matrix(c(2000,2),nrow=1)
@@ -187,9 +187,9 @@ if( FALSE ) {
     init.list2$bmat[2:nrow(init.list2$bmat), ] <- 1
     init.list2$bi[] <- 10
     results <- tvbtgibbshome(wins, losses, ties, a=10, nogroups.bmask,
-                             kappa=10, nu=10, omega=Inf, rho, rho_param,
+                             kappa=100, nu=100, omega=Inf, rho, rho_param,
                              Ngibbs=1000, Nburn=10, init.list=init.list2,
-                             sample.skip <- 10, drawRho=FALSE)
+                             sample.skip <- 10)
     save(results, file="~/Dropbox/tvranking/Data/Soccer/eu_nogroups_2015.RData")
 
     ## NO DATA
@@ -212,13 +212,31 @@ if( FALSE ) {
 
     
     ## Run with non-time varying means
-    results <- tvbtgibbshome(wins, losses, ties, a, bmask.list, kappa=10, nu=10,
-                             omega=Inf,rho, rho_param, Ngibbs=10000, Nburn=10, sample.skip=10,
-                             init.list=init.list, drawRho=FALSE)
+    results <- tvbtgibbshome(wins, losses, ties, a, bmask.list, kappa=10, nu=5,
+                             omega=Inf, rho, rho_param, Ngibbs=1000, Nburn=100,
+                             sample.skip=10,
+                             init.list=init.list)
 
-    sort(rowMeans(2/results$b.samps[,init$T,]))
+
+    sort(a/results$b.samps[, init$T, 90])
+    mean(results$lambda.samps[, , 90][bmask.list[["EC"]]])
+
+    mean(results$lambda.samps[, , 90][bmask.list[["E3"]]])
+    mean(results$lambda.samps[, , 90][bmask.list[["E2"]]])
+    mean(results$lambda.samps[, , 90][bmask.list[["E1"]]])
+    mean(results$lambda.samps[, , 90][bmask.list[["E0"]]])
+
     results$lambda.samps[102, , 9]
     save(results,file="~/Dropbox/tvranking/Data/Soccer/eu_constant_b_2015.RData")
+
+
+
+
+
+
+
+
+
     ## Rprof(NULL)
 
     ## Run with time varying means
@@ -256,9 +274,18 @@ if( FALSE ) {
     tms <- c(15,131,135,125,32,132,5,100,99,35,17)
 
     pdf("tv_plot.pdf")
-    plotLambdas(lambda.mean[tms,],rownames(wins[[1]])[tms])
+    plotLambdas(lambda.mean[tms,], rownames(wins[[1]])[tms])
     dev.off()
 
+    E0teams <- which(bmask.list[["E0"]][, T])
+    plotLambdas(lambda.mean[E0teams,], names(E0teams))
+
+    SPteams <- which(bmask.list[["SP1"]][, T])
+    plotLambdas(lambda.mean[SPteams,], names(SPteams))
+
+    topTeams <- names(head(sort(lambda.mean[, T], decreasing=TRUE), n=10))
+    plotLambdas(lambda.mean[topTeams,], topTeams)
+    
     german.teams <- which(bmask.list[["D1"]][,240])
     mean(lambda.mean[german.teams,240])
     plotLambdas(lambda.mean[german.teams,],rownames(wins[[1]])[german.teams])
